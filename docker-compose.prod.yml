@@ -1,0 +1,10 @@
+services:
+  transfermarkt-api:
+    image: zcoutverse/transfermarkt-api:latest
+    container_name: transfermarkt-api
+    ports:
+      - "8000:8000"
+    environment:
+      - RATE_LIMITING_ENABLE=true
+      - RATE_LIMITING_FREQUENCY=2/3second
+    restart: unless-stopped

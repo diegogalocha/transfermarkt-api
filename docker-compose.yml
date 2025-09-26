@@ -1,0 +1,12 @@
+services:
+  transfermarkt-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transfermarkt-api
+    ports:
+      - "8000:8000"
+    environment:
+      - RATE_LIMITING_ENABLE=false
+      - RATE_LIMITING_FREQUENCY=0/1second
+    restart: unless-stopped
