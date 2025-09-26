@@ -34,6 +34,7 @@ class Players:
         NAME_IN_HOME_COUNTRY = "//span[text()='Name in home country:']//following::span[1]//text()"
         FULL_NAME = "//span[text()='Full name:']//following::span[1]//text()"
         DATE_OF_BIRTH_AGE = "//span[@itemprop='birthDate']//text()"
+        DATE_OF_BIRTH = "//span[contains(normalize-space(.), 'Date of birth')]/following-sibling::span[contains(@class,'info-table__content--bold')][1]//text()"
         PLACE_OF_BIRTH_CITY = "//span[contains(text(),'Place of birth')]//following::span[1]//text()"
         PLACE_OF_BIRTH_COUNTRY = "//span[contains(text(),'Place of birth')]//following::span[1]//img//@title"
         HEIGHT = "//span[text()='Height:']//following::span[1]//text()"

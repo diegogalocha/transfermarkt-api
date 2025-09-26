@@ -1,7 +1,8 @@
 from datetime import date
 from enum import Enum
 from typing import Optional
-
+from pydantic import HttpUrl, Field
+from pydantic import ConfigDict
 from pydantic import HttpUrl
 
 from app.schemas.base import AuditMixin, TransfermarktBaseModel
@@ -60,7 +61,7 @@ class PlayerProfile(TransfermarktBaseModel, AuditMixin):
     full_name: Optional[str]
     name_in_home_country: Optional[str]
     image_url: Optional[HttpUrl]
-    date_of_birth: Optional[date]
+    date_of_birth: Optional[date] = Field(default=None, alias="dateOfBirth")
     place_of_birth: PlayerPlaceOfBirth
     age: Optional[int]
     height: Optional[int]
@@ -77,3 +78,6 @@ class PlayerProfile(TransfermarktBaseModel, AuditMixin):
     socialMedia: Optional[list[str]]
     trainer_profile: Optional[TrainerProfile]
     relatives: Optional[list[Relatives]]
+    dateOfBirthTest: Optional[str] = Field(default=None, alias="dateOfBirthTest")
+
+    model_config = ConfigDict(populate_by_name=True)

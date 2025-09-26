@@ -66,11 +66,19 @@ class TransfermarktPlayerProfile(TransfermarktBase):
         self.response["fullName"] = self.get_text_by_xpath(Players.Profile.FULL_NAME)
         self.response["nameInHomeCountry"] = self.get_text_by_xpath(Players.Profile.NAME_IN_HOME_COUNTRY)
         self.response["imageUrl"] = self.get_text_by_xpath(Players.Profile.IMAGE_URL)
-        self.response["dateOfBirth"] = safe_regex(
-            self.get_text_by_xpath(Players.Profile.DATE_OF_BIRTH_AGE),
-            REGEX_DOB_AGE,
-            "dob",
-        )
+        dob_cell = self.get_text_by_xpath(Players.Profile.DATE_OF_BIRTH)
+        if dob_cell and dob_cell.strip():
+            self.response["dateOfBirth"] = dob_cell.strip()
+        else:
+            # Fallback to parsing the 'birthDate/age' span with regex
+            self.response["dateOfBirth"] = safe_regex(
+                self.get_text_by_xpath(Players.Profile.DATE_OF_BIRTH_AGE),
+                REGEX_DOB_AGE,
+                "dob",
+            )
+        # Optional: remove this testing field or keep it only in tests
+        # self.response["dateOfBirthTest"] = dob_cell
+        self.response["dateOfBirthTest"] = self.get_text_by_xpath(Players.Profile.DATE_OF_BIRTH)
         self.response["placeOfBirth"] = {
             "city": self.get_text_by_xpath(Players.Profile.PLACE_OF_BIRTH_CITY),
             "country": self.get_text_by_xpath(Players.Profile.PLACE_OF_BIRTH_COUNTRY),
