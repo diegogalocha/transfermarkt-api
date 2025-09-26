@@ -1,0 +1,907 @@
+openapi: 3.1.0
+info:
+  title: ZCoutverse API
+  version: 0.1.0
+  description: API MVP para ZCoutverse (scouts + admin). Autenticación vía JWT.
+servers:
+  - url: https://api.zcoutverse.com/api/v1
+    description: Producción
+  - url: http://localhost:3000/api/v1
+    description: Local
+
+tags:
+  - name: Auth
+  - name: Users
+  - name: Players
+  - name: AI
+  - name: Reports
+  - name: Posts
+  - name: ShareLinks
+  - name: Messages
+  - name: Notifications
+  - name: Reputation
+  - name: Search
+  - name: Stats
+  - name: Moderation
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    LimitParam:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    IDParam:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+  schemas:
+    Error:
+      type: object
+      properties:
+        message: { type: string }
+        code: { type: string }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        type: { type: string, enum: [scout, club_user, admin] }
+        bio: { type: string }
+        avatar_url: { type: string }
+        privacy_level: { type: string, enum: [public, followers_only, clubs_only] }
+        created_at: { type: string, format: date-time }
+    ScoutCertificate:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        file_url: { type: string }
+        approved: { type: boolean }
+        created_at: { type: string, format: date-time }
+    Player:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        position: { type: string }
+        current_club: { type: string }
+        league: { type: string }
+    Post:
+      type: object
+      properties:
+        id: { type: integer }
+        scout_id: { type: integer }
+        type: { type: string, enum: [report, comment] }
+        title: { type: string }
+        content: { type: string }
+        player_id: { type: integer, nullable: true }
+        video_url: { type: string, nullable: true }
+        image_url: { type: string, nullable: true }
+        ai_generated: { type: boolean }
+        visibility:
+          type: string
+          enum: [public, clubs_only, private_link, paywalled]
+        created_at: { type: string, format: date-time }
+    Report:
+      type: object
+      properties:
+        id: { type: integer }
+        post_id: { type: integer }
+        price: { type: number, format: float }
+        status: { type: string, enum: [pending_validation, published, rejected] }
+        first_analysis: { type: boolean }
+        visibility:
+          type: string
+          enum: [public, clubs_only, private_link, paywalled]
+        pdf_url: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    Notification:
+      type: object
+      properties:
+        id: { type: integer }
+        type: { type: string }
+        message: { type: string }
+        reference_id: { type: integer }
+        read: { type: boolean }
+        created_at: { type: string, format: date-time }
+    Conversation:
+      type: object
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        other_user_id: { type: integer }
+        last_message_preview: { type: string }
+        unread_count: { type: integer }
+    Message:
+      type: object
+      properties:
+        id: { type: integer }
+        conversation_id: { type: integer }
+        sender_id: { type: integer }
+        receiver_id: { type: integer }
+        content: { type: string }
+        read: { type: boolean }
+        created_at: { type: string, format: date-time }
+    ReputationSummary:
+      type: object
+      properties:
+        score: { type: integer }
+        level: { type: string }
+        breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              points: { type: integer }
+              created_at: { type: string, format: date-time }
+    ShareLink:
+      type: object
+      properties:
+        id: { type: integer }
+        token: { type: string }
+        url: { type: string }
+        expires_at: { type: string, format: date-time }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register-scout:
+    post:
+      tags: [Auth]
+      summary: Registro de usuario scout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        "201": { description: Creado, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "400": { description: Error validación, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login y obtención de JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  user: { $ref: "#/components/schemas/User" }
+        "401": { description: Credenciales inválidas }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Solicita reset de contraseña
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "204": { description: Email enviado si existe }
+
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Cambia contraseña del usuario autenticado
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string, minLength: 8 }
+      responses:
+        "204": { description: Actualizada }
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Perfil del usuario autenticado
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+    put:
+      tags: [Users]
+      summary: Edita perfil (bio, avatar, privacidad)
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bio: { type: string }
+                avatar_url: { type: string }
+                privacy_level: { type: string, enum: [public, followers_only, clubs_only] }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Perfil público de usuario
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "404": { description: No encontrado }
+
+  /users/{id}/posts:
+    get:
+      tags: [Users]
+      summary: Posts de un usuario
+      parameters:
+        - { $ref: "#/components/parameters/IDParam" }
+        - { $ref: "#/components/parameters/PageParam" }
+        - { $ref: "#/components/parameters/LimitParam" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Post" } }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+
+  /users/{id}/followers:
+    get:
+      tags: [Users]
+      summary: Seguidores
+      parameters: [ { $ref: "#/components/parameters/IDParam" }, { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /users/{id}/following:
+    get:
+      tags: [Users]
+      summary: Seguidos
+      parameters: [ { $ref: "#/components/parameters/IDParam" }, { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /users/{id}/follow:
+    post:
+      tags: [Users]
+      summary: Seguir usuario
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+    delete:
+      tags: [Users]
+      summary: Dejar de seguir
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+
+  /users/me/certificates:
+    get:
+      tags: [Users]
+      summary: Lista certificados del scout
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Users]
+      summary: Sube un certificado del scout
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, file_url]
+              properties:
+                title: { type: string }
+                file_url: { type: string }
+      responses:
+        "201": { description: Creado }
+
+  /players:
+    get:
+      tags: [Players]
+      summary: Búsqueda de jugadores por texto (mín. 3 letras)
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema: { type: string, minLength: 3 }
+        - name: league_id
+          in: query
+          schema: { type: string }
+        - name: team_id
+          in: query
+          schema: { type: string }
+        - { $ref: "#/components/parameters/PageParam" }
+        - { $ref: "#/components/parameters/LimitParam" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Player" } }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+
+  /players/{id}:
+    get:
+      tags: [Players]
+      summary: Perfil del jugador seleccionado
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Player" } } } }
+        "404": { description: No encontrado }
+
+  /ai/parse-report:
+    post:
+      tags: [AI]
+      summary: IA — interpreta texto libre y devuelve campos segmentados
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [language, raw_text]
+              properties:
+                language: { type: string }
+                player_hint:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    name: { type: string }
+                raw_text: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /ai/moderate-text:
+    post:
+      tags: [AI]
+      summary: IA — moderación y scoring de riesgo
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, context]
+              properties:
+                text: { type: string }
+                context: { type: string, enum: [post, report] }
+      responses:
+        "200": { description: OK }
+
+  /reports:
+    post:
+      tags: [Reports]
+      summary: Crea informe (borrador)
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [player_id, type]
+              properties:
+                player_id: { type: integer }
+                type: { type: string, enum: [basic, advanced] }
+                title: { type: string }
+                description: { type: string }
+                visibility: { type: string, enum: [public, clubs_only, private_link, paywalled] }
+      responses:
+        "201": { description: Creado, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+
+  /reports/{id}:
+    get:
+      tags: [Reports]
+      summary: Detalle de informe (oculta contenido si es paywalled y no comprado)
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+    put:
+      tags: [Reports]
+      summary: Actualiza informe (metadata / content_json)
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                visibility: { type: string, enum: [public, clubs_only, private_link, paywalled] }
+                content_json: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Reports]
+      summary: Borra informe propio
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: Borrado }
+
+  /reports/{id}/submit:
+    post:
+      tags: [Reports]
+      summary: Envía a moderación
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "202": { description: En cola de moderación }
+
+  /reports/{id}/validation:
+    get:
+      tags: [Reports]
+      summary: Estado de validación IA / manual
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /reports/{id}/publish:
+    post:
+      tags: [Reports]
+      summary: Publica informe (tras pasar moderación)
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: Publicado }
+
+  /reports/{id}/generate:
+    post:
+      tags: [Reports, AI]
+      summary: Genera PDF a partir de plantilla y content_json
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pdf_url: { type: string }
+
+  /reports/{id}/download:
+    get:
+      tags: [Reports]
+      summary: Descarga el PDF del informe
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200":
+          description: PDF stream
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /reports/{id}/share/twitter:
+    post:
+      tags: [Reports]
+      summary: Genera intent/share para X/Twitter
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  share_url: { type: string }
+
+  /posts:
+    get:
+      tags: [Posts]
+      summary: Feed de posts (seguidos + filtros)
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string, enum: [report, comment] }
+        - name: player_id
+          in: query
+          schema: { type: integer }
+        - name: scout_id
+          in: query
+          schema: { type: integer }
+        - name: visibility
+          in: query
+          schema: { type: string, enum: [public, clubs_only, private_link, paywalled] }
+        - name: tag
+          in: query
+          schema: { type: string }
+        - { $ref: "#/components/parameters/PageParam" }
+        - { $ref: "#/components/parameters/LimitParam" }
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Posts]
+      summary: Crea post
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, content]
+              properties:
+                type: { type: string, enum: [report, comment] }
+                title: { type: string }
+                content: { type: string }
+                player_id: { type: integer, nullable: true }
+                image_url: { type: string, nullable: true }
+                video_url: { type: string, nullable: true }
+                visibility: { type: string, enum: [public, clubs_only, private_link, paywalled] }
+      responses:
+        "201": { description: Creado, content: { application/json: { schema: { $ref: "#/components/schemas/Post" } } } }
+
+  /posts/latest:
+    get:
+      tags: [Posts]
+      summary: Últimos posts
+      parameters: [ { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /posts/{id}:
+    get:
+      tags: [Posts]
+      summary: Detalle de post
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Post" } } } }
+    put:
+      tags: [Posts]
+      summary: Edita post
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Posts]
+      summary: Elimina post propio
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: Borrado }
+
+  /posts/{id}/preview:
+    get:
+      tags: [Posts]
+      summary: Vista limitada para private_link
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /posts/{id}/like:
+    post:
+      tags: [Posts]
+      summary: Dar like
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+    delete:
+      tags: [Posts]
+      summary: Quitar like
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+
+  /posts/{id}/repost:
+    post:
+      tags: [Posts]
+      summary: Repost (RT interno)
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+
+  /posts/{id}/save:
+    post:
+      tags: [Posts]
+      summary: Guardar post
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+    delete:
+      tags: [Posts]
+      summary: Quitar de guardados
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+
+  /share-links:
+    post:
+      tags: [ShareLinks]
+      summary: Crea link privado con token (opcional TTL)
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                post_id: { type: integer }
+                report_id: { type: integer }
+                ttl_seconds: { type: integer, minimum: 60 }
+      responses:
+        "201": { description: Creado, content: { application/json: { schema: { $ref: "#/components/schemas/ShareLink" } } } }
+
+  /share-links/{id}:
+    delete:
+      tags: [ShareLinks]
+      summary: Revoca un link privado
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: Revocado }
+
+  /messages:
+    get:
+      tags: [Messages]
+      summary: Conversaciones del usuario
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /messages/start:
+    post:
+      tags: [Messages]
+      summary: Crea/obtiene conversación con un usuario
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: integer }
+      responses:
+        "201": { description: Creado/recuperado }
+
+  /messages/{id}:
+    get:
+      tags: [Messages]
+      summary: Mensajes de una conversación
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" }, { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Messages]
+      summary: Enviar mensaje a la conversación
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+      responses:
+        "201": { description: Enviado }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: Notificaciones del usuario
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /notifications/{id}/read:
+    put:
+      tags: [Notifications]
+      summary: Marca notificación como leída
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "204": { description: OK }
+
+  /reputation/me:
+    get:
+      tags: [Reputation]
+      summary: Resumen de reputación del scout autenticado
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReputationSummary" } } } }
+
+  /reputation/me/history:
+    get:
+      tags: [Reputation]
+      summary: Histórico de reputación (serie temporal)
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/PageParam" }, { $ref: "#/components/parameters/LimitParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /search/posts:
+    get:
+      tags: [Search]
+      summary: Búsqueda de posts (texto + filtros)
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: tags
+          in: query
+          schema: { type: string }
+        - name: player_id
+          in: query
+          schema: { type: integer }
+        - name: league
+          in: query
+          schema: { type: string }
+        - name: team
+          in: query
+          schema: { type: string }
+        - { $ref: "#/components/parameters/PageParam" }
+        - { $ref: "#/components/parameters/LimitParam" }
+      responses:
+        "200": { description: OK }
+
+  /search/users:
+    get:
+      tags: [Search]
+      summary: Búsqueda de usuarios/scouts por nombre/bio
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - { $ref: "#/components/parameters/PageParam" }
+        - { $ref: "#/components/parameters/LimitParam" }
+      responses:
+        "200": { description: OK }
+
+  /search/reports:
+    get:
+      tags: [Search]
+      summary: Búsqueda de informes
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - { $ref: "#/components/parameters/PageParam" }
+        - { $ref: "#/components/parameters/LimitParam" }
+      responses:
+        "200": { description: OK }
+
+  /stats/posts/{id}:
+    get:
+      tags: [Stats]
+      summary: Estadísticas de un post
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /stats/reports/{id}:
+    get:
+      tags: [Stats]
+      summary: Estadísticas de un informe
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      responses:
+        "200": { description: OK }
+
+  /moderation/report:
+    post:
+      tags: [Moderation]
+      summary: Reportar usuario/post
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reported_user_id: { type: integer }
+                post_id: { type: integer }
+                reason: { type: string }
+      responses:
+        "201": { description: Creado }
+
+  /moderation/reports:
+    get:
+      tags: [Moderation]
+      summary: (Admin) Listado de reportes
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200": { description: OK }
+
+  /moderation/reports/{id}:
+    put:
+      tags: [Moderation]
+      summary: (Admin) Resolver reporte
+      security: [ { bearerAuth: [] } ]
+      parameters: [ { $ref: "#/components/parameters/IDParam" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [pending, reviewed, action_taken] }
+                notes: { type: string }
+      responses:
+        "200": { description: OK }
