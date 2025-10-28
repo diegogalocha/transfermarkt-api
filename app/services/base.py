@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from fastapi import HTTPException
 from lxml import etree
 from requests import Response, TooManyRedirects
+from requests.exceptions import Timeout
 
 from app.utils.utils import trim
 from app.utils.xpath import Pagination
@@ -55,7 +56,10 @@ class TransfermarktBase:
                         "Safari/537.36"
                     ),
                 },
+                timeout=10,  # 10 seconds timeout for Transfermarkt requests
             )
+        except Timeout:
+            raise HTTPException(status_code=504, detail=f"Request timeout for url: {url}")
         except TooManyRedirects:
             raise HTTPException(status_code=404, detail=f"Not found for url: {url}")
         except ConnectionError:
