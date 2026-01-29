@@ -34,6 +34,7 @@ class TransfermarktPlayerSearch(TransfermarktBase):
         """
         Parse and return a list of player search results. Each result includes player information such as their unique
         identifier, name, position, club (including ID and name), age, nationality, and market value.
+        Filters out retired players (club "Retired" with clubId "123").
 
         Returns:
             list: A list of dictionaries, with each dictionary representing a player search result.
@@ -50,6 +51,10 @@ class TransfermarktPlayerSearch(TransfermarktBase):
             age = trim(result.xpath(Players.Search.AGE))
             nationalities = result.xpath(Players.Search.NATIONALITIES)
             market_value = trim(result.xpath(Players.Search.MARKET_VALUE))
+
+            # Filter out retired players
+            if club_name == "Retired" and club_id == "123":
+                continue
 
             results.append(
                 {
