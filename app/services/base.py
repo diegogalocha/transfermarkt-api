@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 from xml.etree import ElementTree
@@ -11,6 +12,10 @@ from requests.exceptions import Timeout
 
 from app.utils.utils import trim
 from app.utils.xpath import Pagination
+
+MAX_RETRIES = 3
+RETRY_BACKOFF = [1, 2, 4]  # seconds between attempts
+RETRY_ON_STATUS = {403, 429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -31,7 +36,7 @@ class TransfermarktBase:
 
     def make_request(self, url: Optional[str] = None) -> Response:
         """
-        Make an HTTP GET request to the specified URL.
+        Make an HTTP GET request to the specified URL, with automatic retries on transient errors.
 
         Args:
             url (str, optional): The URL to make the request to. If not provided, the class's URL
@@ -42,41 +47,61 @@ class TransfermarktBase:
 
         Raises:
             HTTPException: If there are too many redirects, or if the server returns a client or
-                server error status code.
+                server error status code after all retries are exhausted.
         """
         url = self.URL if not url else url
-        try:
-            response: Response = requests.get(
-                url=url,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/113.0.0.0 "
-                        "Safari/537.36"
-                    ),
-                },
-                timeout=10,  # 10 seconds timeout for Transfermarkt requests
-            )
-        except Timeout:
-            raise HTTPException(status_code=504, detail=f"Request timeout for url: {url}")
-        except TooManyRedirects:
-            raise HTTPException(status_code=404, detail=f"Not found for url: {url}")
-        except ConnectionError:
-            raise HTTPException(status_code=500, detail=f"Connection error for url: {url}")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error for url: {url}. {e}")
-        if 400 <= response.status_code < 500:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Client Error. {response.reason} for url: {url}",
-            )
-        elif 500 <= response.status_code < 600:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Server Error. {response.reason} for url: {url}",
-            )
-        return response
+        last_exception: Optional[HTTPException] = None
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                response: Response = requests.get(
+                    url=url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/113.0.0.0 "
+                            "Safari/537.36"
+                        ),
+                    },
+                    timeout=10,  # 10 seconds timeout for Transfermarkt requests
+                )
+            except Timeout:
+                last_exception = HTTPException(status_code=504, detail=f"Request timeout for url: {url}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_BACKOFF[attempt])
+                    continue
+                raise last_exception
+            except TooManyRedirects:
+                raise HTTPException(status_code=404, detail=f"Not found for url: {url}")
+            except ConnectionError:
+                last_exception = HTTPException(status_code=500, detail=f"Connection error for url: {url}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_BACKOFF[attempt])
+                    continue
+                raise last_exception
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error for url: {url}. {e}")
+
+            if response.status_code in RETRY_ON_STATUS:
+                last_exception = HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Retryable error ({response.status_code}). {response.reason} for url: {url}",
+                )
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_BACKOFF[attempt])
+                    continue
+                raise last_exception
+
+            if 400 <= response.status_code < 500:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Client Error. {response.reason} for url: {url}",
+                )
+
+            return response
+
+        raise last_exception
 
     def request_url_bsoup(self) -> BeautifulSoup:
         """
