@@ -1,8 +1,38 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from app.services.base import TransfermarktBase
 from app.utils.utils import extract_from_url, safe_split
 from app.utils.xpath import Players
+
+
+def classify_transfer_type(fee_text: Optional[str]) -> Optional[str]:
+    """
+    Derive the real transfer type from the raw Transfermarkt fee label.
+
+    Transfermarkt (.com domain) returns fee labels in English, e.g.:
+        "End of loan"    -> loan_return (player returns to owner club)
+        "loan transfer"  -> loan
+        "Loan fee: €Xm"  -> loan
+        "free transfer"  -> free
+        "€4.50m", "?"    -> permanent / None
+
+    Args:
+        fee_text: Raw fee label.
+
+    Returns:
+        One of "permanent" | "loan" | "loan_return" | "free", or None if unknown.
+    """
+    text = (fee_text or "").lower().strip()
+    if not text or text in ("-", "?"):
+        return None
+    if "end of loan" in text or "end of the loan" in text:
+        return "loan_return"
+    if "loan" in text:
+        return "loan"
+    if "free transfer" in text or text == "free":
+        return "free"
+    return "permanent"
 
 
 @dataclass
@@ -54,6 +84,8 @@ class TransfermarktPlayerTransfers(TransfermarktBase):
                 "season": transfer["season"],
                 "marketValue": transfer["marketValue"],
                 "fee": transfer["fee"],
+                "feeText": transfer["fee"],
+                "transferType": classify_transfer_type(transfer["fee"]),
             }
             for transfer in transfers
         ]
