@@ -22,14 +22,47 @@ class TransfermarktPlayerMarketValue(TransfermarktBase):
 
     player_id: str = None
     URL: str = "https://www.transfermarkt.com/-/marktwertverlauf/spieler/{player_id}"
+    FALLBACK_URL: str = "https://www.transfermarkt.es/-/marktwertverlauf/spieler/{player_id}"
     URL_MARKET_VALUE: str = "https://www.transfermarkt.com/ceapi/marketValueDevelopment/graph/{player_id}"
 
     def __post_init__(self) -> None:
         """Initialize the TransfermarktPlayerMarketValue class."""
         self.URL = self.URL.format(player_id=self.player_id)
-        self.page = self.request_url_page()
+        self.FALLBACK_URL = self.FALLBACK_URL.format(player_id=self.player_id)
+        self.page = self.__fetch_market_value_page()
         self.raise_exception_if_not_found(xpath=Players.Profile.NAME)
         self.market_value_chart = self.make_request(url=self.URL_MARKET_VALUE.format(player_id=self.player_id))
+
+    def __fetch_market_value_page(self):
+        """
+        Fetch the market value page with fallback to .es domain for better reliability.
+
+        Returns:
+            ElementTree: The parsed market value page.
+
+        Raises:
+            HTTPException: If all URLs fail.
+        """
+        from fastapi import HTTPException
+        
+        last_error = None
+        for url in (self.URL, self.FALLBACK_URL):
+            try:
+                original_url = self.URL
+                self.URL = url
+                page = self.request_url_page()
+                self.URL = original_url
+                return page
+            except HTTPException as error:
+                last_error = error
+                if error.status_code >= 500:
+                    continue
+                raise
+            except Exception as error:
+                last_error = HTTPException(status_code=500, detail=f"Error fetching market value page: {str(error)}")
+                continue
+        
+        raise last_error if last_error else HTTPException(status_code=500, detail="Failed to fetch market value page")
 
     def __parse_market_value_history(self) -> list:
         """

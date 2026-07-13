@@ -20,12 +20,56 @@ class TransfermarktPlayerProfile(TransfermarktBase):
 
     player_id: str = None
     URL: str = "https://www.transfermarkt.com/-/profil/spieler/{player_id}"
+    FALLBACK_URL: str = "https://www.transfermarkt.es/-/profil/spieler/{player_id}"
 
     def __post_init__(self) -> None:
         """Initialize the TransfermarktPlayerProfile class."""
         self.URL = self.URL.format(player_id=self.player_id)
-        self.page = self.request_url_page()
+        self.FALLBACK_URL = self.FALLBACK_URL.format(player_id=self.player_id)
+        self.page = self.__fetch_player_page()
         self.raise_exception_if_not_found(xpath=Players.Profile.URL)
+
+    def __fetch_player_page(self):
+        """
+        Fetch the player profile page, trying multiple domain mirrors for better reliability.
+        Falls back to .es domain if .com fails with 502/504 errors.
+
+        Returns:
+            ElementTree: The parsed player profile page.
+
+        Raises:
+            HTTPException: If all URLs fail.
+        """
+        from fastapi import HTTPException
+        
+        last_error = None
+        
+        for idx, url in enumerate((self.URL, self.FALLBACK_URL), 1):
+            try:
+                print(f"[Profile] Attempt {idx}/2: Fetching from {url}")
+                # Temporarily override URL for request
+                original_url = self.URL
+                self.URL = url
+                page = self.request_url_page()
+                self.URL = original_url  # Restore original
+                print(f"[Profile] Success on attempt {idx}")
+                return page
+            except HTTPException as error:
+                last_error = error
+                print(f"[Profile] Attempt {idx} failed with {error.status_code}: {error.detail}")
+                # Only retry on server errors (502, 504, etc.)
+                if error.status_code >= 500:
+                    continue
+                # For client errors (404, etc.), fail immediately
+                raise
+            except Exception as error:
+                last_error = HTTPException(status_code=500, detail=f"Error fetching player page: {str(error)}")
+                print(f"[Profile] Attempt {idx} exception: {str(error)}")
+                continue
+        
+        # All attempts failed
+        print(f"[Profile] All attempts failed for player {self.player_id}")
+        raise last_error if last_error else HTTPException(status_code=500, detail="Failed to fetch player page")
 
     def __parse_player_relatives(self) -> list:
         """
@@ -108,7 +152,14 @@ class TransfermarktPlayerProfile(TransfermarktBase):
             "lastClubName": self.get_text_by_xpath(Players.Profile.LAST_CLUB_NAME),
             "mostGamesFor": self.get_text_by_xpath(Players.Profile.MOST_GAMES_FOR_CLUB_NAME),
         }
-        self.response["marketValue"] = self.get_text_by_xpath(Players.Profile.MARKET_VALUE, iloc_to=3, join_str="")
+        raw_market_value = self.get_text_by_xpath(Players.Profile.MARKET_VALUE, iloc_to=3, join_str="")
+        # Clean up market value by removing "Última revisión" or "Last update" text
+        if raw_market_value:
+            # Split by common separators and take only the first part (the actual value)
+            market_value_clean = raw_market_value.split("Última")[0].split("Last")[0].strip()
+            self.response["marketValue"] = market_value_clean
+        else:
+            self.response["marketValue"] = raw_market_value
         self.response["agent"] = {
             "name": self.get_text_by_xpath(Players.Profile.AGENT_NAME),
             "url": self.get_text_by_xpath(Players.Profile.AGENT_URL),

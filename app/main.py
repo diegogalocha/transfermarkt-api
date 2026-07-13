@@ -1,3 +1,4 @@
+import logging
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,13 @@ from starlette.responses import RedirectResponse
 from app.api.api import api_router
 from app.settings import settings
 
+# Configure logging to show INFO level messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 # ✅ Configuración del Rate Limiter
 limiter = Limiter(
     key_func=get_remote_address,
@@ -18,7 +26,12 @@ limiter = Limiter(
 )
 
 # ✅ Inicializa FastAPI
-app = FastAPI(title="Transfermarkt API")
+is_production = settings.NODE_ENV.lower() == "production"
+app = FastAPI(
+    title="Transfermarkt API",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc"
+)
 
 # ✅ Habilitar CORS para el frontend local
 origins = [
@@ -41,9 +54,11 @@ app.add_middleware(SlowAPIMiddleware)
 # ✅ Prefijo `/api/tm` para todas las rutas
 app.include_router(api_router, prefix="/api/tm")
 
-# ✅ Redirección a la documentación
+# ✅ Redirección a la documentación (solo si está habilitada)
 @app.get("/", include_in_schema=False)
-def docs_redirect():
+def root_redirect():
+    if is_production:
+        return {"status": "ok"}
     return RedirectResponse(url="/docs")
 
 # ✅ Punto de entrada para Uvicorn
