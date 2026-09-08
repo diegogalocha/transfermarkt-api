@@ -4,7 +4,27 @@ import pytest
 from fastapi import HTTPException
 from schema import And, Optional, Schema
 
-from app.services.players.transfers import TransfermarktPlayerTransfers
+from app.services.players.transfers import TransfermarktPlayerTransfers, classify_transfer_type
+
+
+@pytest.mark.parametrize(
+    "fee_text,expected",
+    [
+        ("End of loan", "loan_return"),
+        ("end of the loan", "loan_return"),
+        ("loan transfer", "loan"),
+        ("Loan fee: €2.00m", "loan"),
+        ("free transfer", "free"),
+        ("free", "free"),
+        ("€4.50m", "permanent"),
+        ("-", None),
+        ("?", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_classify_transfer_type(fee_text, expected):
+    assert classify_transfer_type(fee_text) == expected
 
 
 def test_get_player_transfers_not_found():
@@ -36,6 +56,10 @@ def test_get_player_transfers(player_id, len_greater_than_0, regex_integer, rege
                     "upcoming": bool,
                     Optional("marketValue"): And(str, len_greater_than_0, regex_market_value),
                     Optional("fee"): And(str, len_greater_than_0),
+                    Optional("feeText"): And(str, len_greater_than_0),
+                    Optional("transferType"): And(
+                        str, lambda s: s in {"permanent", "loan", "loan_return", "free"}
+                    ),
                 },
             ],
             "youthClubs": list,

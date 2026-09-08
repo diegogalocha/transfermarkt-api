@@ -1,8 +1,38 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from app.services.base import TransfermarktBase
 from app.utils.utils import extract_from_url, safe_split
 from app.utils.xpath import Players
+
+
+def classify_transfer_type(fee_text: Optional[str]) -> Optional[str]:
+    """
+    Derive the real transfer type from the raw Transfermarkt fee label.
+
+    Transfermarkt (.com domain) returns fee labels in English, e.g.:
+        "End of loan"    -> loan_return (player returns to owner club)
+        "loan transfer"  -> loan
+        "Loan fee: €Xm"  -> loan
+        "free transfer"  -> free
+        "€4.50m", "?"    -> permanent / None
+
+    Args:
+        fee_text: Raw fee label.
+
+    Returns:
+        One of "permanent" | "loan" | "loan_return" | "free", or None if unknown.
+    """
+    text = (fee_text or "").lower().strip()
+    if not text or text in ("-", "?"):
+        return None
+    if "end of loan" in text or "end of the loan" in text:
+        return "loan_return"
+    if "loan" in text:
+        return "loan"
+    if "free transfer" in text or text == "free":
+        return "free"
+    return "permanent"
 
 
 @dataclass
@@ -17,14 +47,47 @@ class TransfermarktPlayerTransfers(TransfermarktBase):
 
     player_id: str = None
     URL: str = "https://www.transfermarkt.com/-/transfers/spieler/{player_id}"
+    FALLBACK_URL: str = "https://www.transfermarkt.es/-/transfers/spieler/{player_id}"
     URL_TRANSFERS: str = "https://www.transfermarkt.com/ceapi/transferHistory/list/{player_id}"
 
     def __post_init__(self) -> None:
         """Initialize the TransfermarktPlayerTransfers class."""
         self.URL = self.URL.format(player_id=self.player_id)
-        self.page = self.request_url_page()
+        self.FALLBACK_URL = self.FALLBACK_URL.format(player_id=self.player_id)
+        self.page = self.__fetch_transfers_page()
         self.raise_exception_if_not_found(xpath=Players.Profile.NAME)
         self.transfer_history = self.make_request(url=self.URL_TRANSFERS.format(player_id=self.player_id))
+
+    def __fetch_transfers_page(self):
+        """
+        Fetch the transfers page with fallback to .es domain for better reliability.
+
+        Returns:
+            ElementTree: The parsed transfers page.
+
+        Raises:
+            HTTPException: If all URLs fail.
+        """
+        from fastapi import HTTPException
+        
+        last_error = None
+        for url in (self.URL, self.FALLBACK_URL):
+            try:
+                original_url = self.URL
+                self.URL = url
+                page = self.request_url_page()
+                self.URL = original_url
+                return page
+            except HTTPException as error:
+                last_error = error
+                if error.status_code >= 500:
+                    continue
+                raise
+            except Exception as error:
+                last_error = HTTPException(status_code=500, detail=f"Error fetching transfers page: {str(error)}")
+                continue
+        
+        raise last_error if last_error else HTTPException(status_code=500, detail="Failed to fetch transfers page")
 
     def __parse_player_transfer_history(self) -> list:
         """
@@ -54,6 +117,8 @@ class TransfermarktPlayerTransfers(TransfermarktBase):
                 "season": transfer["season"],
                 "marketValue": transfer["marketValue"],
                 "fee": transfer["fee"],
+                "feeText": transfer["fee"],
+                "transferType": classify_transfer_type(transfer["fee"]),
             }
             for transfer in transfers
         ]

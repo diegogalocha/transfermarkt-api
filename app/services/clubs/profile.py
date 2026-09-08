@@ -18,12 +18,45 @@ class TransfermarktClubProfile(TransfermarktBase):
 
     club_id: str = None
     URL: str = "https://www.transfermarkt.us/-/datenfakten/verein/{club_id}"
+    FALLBACK_URL: str = "https://www.transfermarkt.com/-/datenfakten/verein/{club_id}"
 
     def __post_init__(self) -> None:
         """Initialize the TransfermarktClubProfile class."""
         self.URL = self.URL.format(club_id=self.club_id)
-        self.page = self.request_url_page()
+        self.FALLBACK_URL = self.FALLBACK_URL.format(club_id=self.club_id)
+        self.page = self.__fetch_club_page()
         self.raise_exception_if_not_found(xpath=Clubs.Profile.URL)
+
+    def __fetch_club_page(self):
+        """
+        Fetch the club profile page with fallback to .com domain for better reliability.
+
+        Returns:
+            ElementTree: The parsed club profile page.
+
+        Raises:
+            HTTPException: If all URLs fail.
+        """
+        from fastapi import HTTPException
+        
+        last_error = None
+        for url in (self.URL, self.FALLBACK_URL):
+            try:
+                original_url = self.URL
+                self.URL = url
+                page = self.request_url_page()
+                self.URL = original_url
+                return page
+            except HTTPException as error:
+                last_error = error
+                if error.status_code >= 500:
+                    continue
+                raise
+            except Exception as error:
+                last_error = HTTPException(status_code=500, detail=f"Error fetching club page: {str(error)}")
+                continue
+        
+        raise last_error if last_error else HTTPException(status_code=500, detail="Failed to fetch club page")
 
     def get_club_profile(self) -> dict:
         """
