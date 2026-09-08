@@ -1,3 +1,5 @@
+import base64
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -10,12 +12,48 @@ from lxml import etree
 from requests import Response, TooManyRedirects
 from requests.exceptions import Timeout
 
+from app.settings import settings
 from app.utils.utils import trim
 from app.utils.xpath import Pagination
 
 MAX_RETRIES = 3
-RETRY_BACKOFF = [1, 2, 4]  # seconds between attempts
+RETRY_BACKOFF = [1, 2, 4]  # seconds between attempts (transient errors)
 RETRY_ON_STATUS = {403, 429, 500, 502, 503, 504}
+
+# Statuses that indicate Transfermarkt is serving an anti-bot challenge
+# (WAF/Cloudflare "confirm you are human"). These do NOT clear within the
+# lifetime of a request, so we fail fast instead of retrying: retrying the
+# same flagged IP only makes the caller hang. Request spacing is handled by
+# the upstream scheduler (jitter/long delays), not here.
+BLOCK_ON_STATUS = {405}
+
+# When Zyte is enabled in "fallback" mode, these upstream statuses trigger a
+# retry through Zyte (anti-bot / rate-limit responses from Transfermarkt).
+ZYTE_FALLBACK_STATUS = {403, 405, 429}
+ZYTE_ENDPOINT = "https://api.zyte.com/v1/extract"
+ZYTE_TIMEOUT = 60  # Zyte (esp. browser rendering) can be slower than a direct GET
+
+# Pool of realistic, up-to-date desktop User-Agents. One is picked at random per
+# request so we don't fingerprint every request with the same stale UA.
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:130.0) "
+    "Gecko/20100101 Firefox/130.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) "
+    "Gecko/20100101 Firefox/130.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+]
+
+
+def _random_user_agent() -> str:
+    """Return a random realistic desktop User-Agent string."""
+    return random.choice(USER_AGENTS)
 
 
 @dataclass
@@ -57,19 +95,15 @@ class TransfermarktBase:
                 response: Response = requests.get(
                     url=url,
                     headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/113.0.0.0 "
-                            "Safari/537.36"
-                        ),
+                        "User-Agent": _random_user_agent(),
+                        "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
                     },
                     timeout=10,  # 10 seconds timeout for Transfermarkt requests
                 )
             except Timeout:
                 last_exception = HTTPException(status_code=504, detail=f"Request timeout for url: {url}")
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_BACKOFF[attempt])
+                    time.sleep(self._backoff_seconds(RETRY_BACKOFF, attempt))
                     continue
                 raise last_exception
             except TooManyRedirects:
@@ -77,11 +111,23 @@ class TransfermarktBase:
             except ConnectionError:
                 last_exception = HTTPException(status_code=500, detail=f"Connection error for url: {url}")
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_BACKOFF[attempt])
+                    time.sleep(self._backoff_seconds(RETRY_BACKOFF, attempt))
                     continue
                 raise last_exception
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error for url: {url}. {e}")
+
+            # Transfermarkt is serving an anti-bot challenge (WAF/Cloudflare).
+            # Fail fast: this will not clear within the request, so retrying only
+            # makes the caller hang until its own timeout.
+            if response.status_code in BLOCK_ON_STATUS:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=(
+                        f"Blocked by Transfermarkt anti-bot challenge ({response.status_code}). "
+                        f"{response.reason} for url: {url}"
+                    ),
+                )
 
             if response.status_code in RETRY_ON_STATUS:
                 last_exception = HTTPException(
@@ -89,7 +135,7 @@ class TransfermarktBase:
                     detail=f"Retryable error ({response.status_code}). {response.reason} for url: {url}",
                 )
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_BACKOFF[attempt])
+                    time.sleep(self._backoff_seconds(RETRY_BACKOFF, attempt))
                     continue
                 raise last_exception
 
@@ -103,6 +149,118 @@ class TransfermarktBase:
 
         raise last_exception
 
+    @staticmethod
+    def _backoff_seconds(schedule: list, attempt: int) -> float:
+        """Return the backoff for the given attempt plus random jitter.
+
+        Jitter (0-1s) desynchronises concurrent workers so they don't all retry
+        at the exact same instant and re-trigger the block.
+        """
+        base = schedule[attempt] if attempt < len(schedule) else schedule[-1]
+        return base + random.uniform(0, 1)
+
+    def _zyte_post(self, url: str, payload: dict) -> dict:
+        """POST to the Zyte API and return the parsed JSON, raising on failure."""
+        if settings.ZYTE_GEOLOCATION:
+            payload["geolocation"] = settings.ZYTE_GEOLOCATION
+        try:
+            response = requests.post(
+                ZYTE_ENDPOINT,
+                auth=(settings.ZYTE_API_KEY, ""),
+                json=payload,
+                timeout=ZYTE_TIMEOUT,
+            )
+        except Timeout:
+            raise HTTPException(status_code=504, detail=f"Zyte timeout for url: {url}")
+        except Exception as error:
+            raise HTTPException(status_code=502, detail=f"Zyte request error for url: {url}. {error}")
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Zyte error ({response.status_code}) for url: {url}. {response.text[:200]}",
+            )
+        return response.json()
+
+    def _fetch_via_zyte_browser(self, url: str) -> bytes:
+        """Fetch a browser-rendered page through Zyte (robust against Cloudflare)."""
+        data = self._zyte_post(
+            url,
+            {"url": url, "browserHtml": True, "requestHeaders": {"referer": "https://www.transfermarkt.com/"}},
+        )
+        html = data.get("browserHtml")
+        if not html:
+            raise HTTPException(status_code=502, detail=f"Zyte returned no browserHtml for url: {url}")
+        print(f"[fetch] via Zyte (browser) -> {url}")
+        return html.encode("utf-8")
+
+    def _fetch_via_zyte(self, url: str) -> bytes:
+        """
+        Fetch a page through the Zyte API (handles proxies, bans and anti-bot
+        challenges). Returns the raw HTML bytes.
+
+        Strategy:
+        - If ZYTE_RENDER is on, always use browser rendering.
+        - Otherwise try the cheaper httpResponseBody first. Transfermarkt serves
+          an anti-bot soft-block as a non-200 status (e.g. 202) on some proxies;
+          in that case we escalate to browser rendering, which reliably passes.
+
+        Accept-Language is forced to English on the HTTP path so the returned
+        markup matches the (English) XPath selectors used across the app.
+
+        Raises:
+            HTTPException: If the Zyte request fails or returns no usable body.
+        """
+        if settings.ZYTE_RENDER:
+            return self._fetch_via_zyte_browser(url)
+
+        data = self._zyte_post(
+            url,
+            {
+                "url": url,
+                "httpResponseBody": True,
+                "customHttpRequestHeaders": [{"name": "Accept-Language", "value": "en-US,en;q=0.9"}],
+            },
+        )
+        body_b64 = data.get("httpResponseBody")
+        tm_status = data.get("statusCode")
+        if body_b64 and tm_status == 200:
+            print(f"[fetch] via Zyte (http) -> {url}")
+            return base64.b64decode(body_b64)
+
+        # Anti-bot soft-block over plain HTTP -> escalate to a real browser.
+        print(f"[Zyte] httpResponseBody returned Transfermarkt status {tm_status}; escalating to browser for {url}")
+        return self._fetch_via_zyte_browser(url)
+
+    def _get_page_bytes(self, url: Optional[str] = None) -> bytes:
+        """
+        Return the HTML bytes for the given URL applying the configured fetch
+        strategy (ZYTE_MODE):
+
+        - "off": direct request only.
+        - "always": every request goes through Zyte.
+        - "fallback": direct request first; on an anti-bot block (see
+          ZYTE_FALLBACK_STATUS) retry through Zyte.
+
+        If Zyte is requested but no API key is configured, behaves like "off".
+        """
+        url = self.URL if not url else url
+        mode = (settings.ZYTE_MODE or "off").lower()
+        zyte_ready = bool(settings.ZYTE_API_KEY)
+
+        if mode == "always" and zyte_ready:
+            return self._fetch_via_zyte(url)
+
+        try:
+            response: Response = self.make_request(url)
+            print(f"[fetch] organic (direct) -> {url}")
+            return response.content
+        except HTTPException as error:
+            if mode == "fallback" and zyte_ready and error.status_code in ZYTE_FALLBACK_STATUS:
+                print(f"[Zyte] Direct request blocked ({error.status_code}); falling back to Zyte for {url}")
+                return self._fetch_via_zyte(url)
+            raise
+
     def request_url_bsoup(self) -> BeautifulSoup:
         """
         Fetch the web page content and parse it using BeautifulSoup.
@@ -114,8 +272,8 @@ class TransfermarktBase:
             HTTPException: If there are too many redirects, or if the server returns a client or
                 server error status code.
         """
-        response: Response = self.make_request()
-        return BeautifulSoup(markup=response.content, features="html.parser")
+        content: bytes = self._get_page_bytes()
+        return BeautifulSoup(markup=content, features="html.parser")
 
     @staticmethod
     def convert_bsoup_to_page(bsoup: BeautifulSoup) -> ElementTree:

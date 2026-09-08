@@ -5,6 +5,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - RATE_LIMITING_ENABLE=true
-      - RATE_LIMITING_FREQUENCY=2/3second
+      - RATE_LIMITING_ENABLE=false
+      - RATE_LIMITING_FREQUENCY=0/1second
+      - ZYTE_API_KEY=${ZYTE_API_KEY:-}
+      - ZYTE_MODE=fallback
+      - ZYTE_RENDER=true
+      - ZYTE_GEOLOCATION=US
     restart: unless-stopped
